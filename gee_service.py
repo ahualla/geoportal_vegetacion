@@ -1,3 +1,4 @@
+
 """Capa de acceso a Google Earth Engine (GEE).
 
 Responsabilidades:
@@ -60,18 +61,28 @@ class TTLCache:
             item = self._data.get(key)
             if item is None:
                 return None
+
             expires, value = item
+
             if expires < time.time():
                 del self._data[key]
                 return None
+
             return value
 
     def set(self, key: Any, value: Any, ttl: int | None = None) -> None:
         with self._lock:
             if len(self._data) >= self._max:
-                oldest = min(self._data, key=lambda k: self._data[k][0])
+                oldest = min(
+                    self._data,
+                    key=lambda k: self._data[k][0],
+                )
                 del self._data[oldest]
-            self._data[key] = (time.time() + (ttl or self._ttl), value)
+
+            self._data[key] = (
+                time.time() + (ttl or self._ttl),
+                value,
+            )
 
 
 _cache = TTLCache(Settings.CACHE_TTL_SECONDS)
@@ -89,52 +100,85 @@ def initialize(force: bool = False) -> bool:
     with _init_lock:
         if _state["ready"] and not force:
             return True
+
         try:
             project = Settings.GEE_PROJECT or None
-            if Settings.GEE_SERVICE_ACCOUNT and Settings.GEE_PRIVATE_KEY_FILE:
+
+            if (
+                Settings.GEE_SERVICE_ACCOUNT
+                and Settings.GEE_PRIVATE_KEY_FILE
+            ):
                 creds = ee.ServiceAccountCredentials(
-                    Settings.GEE_SERVICE_ACCOUNT, Settings.GEE_PRIVATE_KEY_FILE
+                    Settings.GEE_SERVICE_ACCOUNT,
+                    Settings.GEE_PRIVATE_KEY_FILE,
                 )
                 ee.Initialize(creds, project=project)
             else:
                 ee.Initialize(project=project)
+
             _state.update(ready=True, error=None)
-            log.info("Google Earth Engine inicializado correctamente.")
-        except Exception as exc:  # noqa: BLE001 - se informa al usuario vía /api/health
+            log.info(
+                "Google Earth Engine inicializado correctamente."
+            )
+
+        except Exception as exc:  # noqa: BLE001
             _state.update(ready=False, error=str(exc))
-            log.warning("No se pudo inicializar Google Earth Engine: %s", exc)
+            log.warning(
+                "No se pudo inicializar Google Earth Engine: %s",
+                exc,
+            )
+
         return _state["ready"]
 
 
 def ensure_ready() -> None:
     if _state["ready"] or initialize():
         return
+
     raise GeeNotReady(
-        "Google Earth Engine no está disponible. Revise las credenciales y la "
-        "variable GEE_PROJECT (consulte el README)."
+        "Google Earth Engine no está disponible. Revise las credenciales "
+        "y la variable GEE_PROJECT (consulte el README)."
     )
 
 
 def status() -> dict[str, Any]:
-    return {"ready": _state["ready"], "error": _state["error"]}
+    return {
+        "ready": _state["ready"],
+        "error": _state["error"],
+    }
 
 
 def _friendly(message: str) -> str:
     low = message.lower()
+
     if "timed out" in low or "deadline" in low:
         return (
-            "Google Earth Engine tardó demasiado en responder. Reduzca el período "
-            "de análisis o inténtelo de nuevo."
+            "Google Earth Engine tardó demasiado en responder. Reduzca "
+            "el período de análisis o inténtelo de nuevo."
         )
+
     if "quota" in low or "too many" in low or "429" in low:
-        return "Se alcanzó el límite de uso de Google Earth Engine. Espere un momento e inténtelo otra vez."
+        return (
+            "Se alcanzó el límite de uso de Google Earth Engine. "
+            "Espere un momento e inténtelo otra vez."
+        )
+
     if "memory" in low:
-        return "El cálculo excedió la memoria disponible. Pruebe con un período más corto."
-    if "permission" in low or "not signed up" in low or "not authorized" in low:
+        return (
+            "El cálculo excedió la memoria disponible. "
+            "Pruebe con un período más corto."
+        )
+
+    if (
+        "permission" in low
+        or "not signed up" in low
+        or "not authorized" in low
+    ):
         return (
             "La cuenta de Earth Engine no tiene permisos para este proyecto. "
             "Revise las credenciales y GEE_PROJECT."
         )
+
     return "Earth Engine devolvió un error: " + message[:300]
 
 
@@ -142,77 +186,150 @@ def _safe(fn: Callable[[], Any]) -> Any:
     """Ejecuta una llamada a GEE traduciendo errores a mensajes legibles."""
     try:
         return fn()
+
     except GeeError:
         raise
+
     except ee.EEException as exc:
         raise GeeError(_friendly(str(exc))) from exc
+
     except Exception as exc:  # noqa: BLE001
-        log.exception("Error inesperado al comunicarse con Earth Engine")
-        raise GeeError("Error de comunicación con Google Earth Engine.") from exc
+        log.exception(
+            "Error inesperado al comunicarse con Earth Engine"
+        )
+        raise GeeError(
+            "Error de comunicación con Google Earth Engine."
+        ) from exc
 
 
 # --------------------------------------------------------------------------- #
 # Construcción de imágenes
 # --------------------------------------------------------------------------- #
 def _peru() -> ee.FeatureCollection:
-    return ee.FeatureCollection(BORDERS).filter(ee.Filter.eq("country_na", "Peru"))
+    return ee.FeatureCollection(BORDERS).filter(
+        ee.Filter.eq("country_na", "Peru")
+    )
 
 
-def _s2_collection(start: str, end: str, max_cloud: int, region: ee.Geometry) -> ee.ImageCollection:
-    end_exclusive = (dt.date.fromisoformat(end) + dt.timedelta(days=1)).isoformat()
+def _s2_collection(
+    start: str,
+    end: str,
+    max_cloud: int,
+    region: ee.Geometry,
+) -> ee.ImageCollection:
+    end_exclusive = (
+        dt.date.fromisoformat(end) + dt.timedelta(days=1)
+    ).isoformat()
+
     return (
         ee.ImageCollection(S2_COLLECTION)
         .filterBounds(region)
         .filterDate(start, end_exclusive)
-        .filter(ee.Filter.lte("CLOUDY_PIXEL_PERCENTAGE", max_cloud))
+        .filter(
+            ee.Filter.lte(
+                "CLOUDY_PIXEL_PERCENTAGE",
+                max_cloud,
+            )
+        )
     )
 
 
 def _mask_clouds(img: ee.Image) -> ee.Image:
-    """Enmascara píxeles sin dato, saturados, sombras, nubes y cirros (banda SCL)."""
+    """Enmascara píxeles sin dato, saturados, sombras, nubes y cirros."""
     scl = img.select("SCL")
+
     bad = (
-        scl.eq(0).Or(scl.eq(1)).Or(scl.eq(3)).Or(scl.eq(8)).Or(scl.eq(9)).Or(scl.eq(10))
+        scl.eq(0)
+        .Or(scl.eq(1))
+        .Or(scl.eq(3))
+        .Or(scl.eq(8))
+        .Or(scl.eq(9))
+        .Or(scl.eq(10))
     )
+
     return img.updateMask(bad.Not())
 
 
 def _spectral_index(index: str, comp: ee.Image) -> ee.Image:
-    nir, red, blue = comp.select("B8"), comp.select("B4"), comp.select("B2")
+    nir = comp.select("B8")
+    red = comp.select("B4")
+    blue = comp.select("B2")
+
     if index == "NDVI":
         value = nir.subtract(red).divide(nir.add(red))
+
     elif index == "SAVI":
-        value = nir.subtract(red).multiply(1 + SAVI_L).divide(nir.add(red).add(SAVI_L))
+        value = (
+            nir.subtract(red)
+            .multiply(1 + SAVI_L)
+            .divide(nir.add(red).add(SAVI_L))
+        )
+
     elif index == "MSAVI":
         value = comp.expression(
-            "(2 * NIR + 1 - sqrt((2 * NIR + 1) * (2 * NIR + 1) - 8 * (NIR - RED))) / 2",
+            "(2 * NIR + 1 - sqrt((2 * NIR + 1) * "
+            "(2 * NIR + 1) - 8 * (NIR - RED))) / 2",
             {"NIR": nir, "RED": red},
         )
+
     elif index == "EVI":
         value = comp.expression(
-            "2.5 * (NIR - RED) / (NIR + 6 * RED - 7.5 * BLUE + 1)",
-            {"NIR": nir, "RED": red, "BLUE": blue},
+            "2.5 * (NIR - RED) / "
+            "(NIR + 6 * RED - 7.5 * BLUE + 1)",
+            {
+                "NIR": nir,
+                "RED": red,
+                "BLUE": blue,
+            },
         )
-    else:  # pragma: no cover - app.py valida el índice antes de llegar aquí
+
+    else:  # pragma: no cover
         raise ValueError(f"Índice desconocido: {index}")
+
     return value.rename("v")
 
 
-def _build(index: str, start: str | None, end: str | None, max_cloud: int | None, region: ee.Geometry):
+def _build(
+    index: str,
+    start: str | None,
+    end: str | None,
+    max_cloud: int | None,
+    region: ee.Geometry,
+):
     """Devuelve (imagen_de_valores 'v', colección_s2 o None)."""
     if index == "BIOMASA":
-        image = ee.ImageCollection(BIOMASS_COLLECTION).select("agb").mean().rename("v")
+        image = (
+            ee.ImageCollection(BIOMASS_COLLECTION)
+            .select("agb")
+            .mean()
+            .rename("v")
+        )
         return image, None
-    col = _s2_collection(start, end, max_cloud, region)
-    comp = col.map(_mask_clouds).select(["B2", "B4", "B8"]).median().multiply(0.0001)
+
+    col = _s2_collection(
+        start,
+        end,
+        max_cloud,
+        region,
+    )
+
+    comp = (
+        col.map(_mask_clouds)
+        .select(["B2", "B4", "B8"])
+        .median()
+        .multiply(0.0001)
+    )
+
     return _spectral_index(index, comp), col
 
 
 def _classify(value: ee.Image, index: str) -> ee.Image:
     """Clasifica en 5 rangos (1-5) conservando la máscara original."""
     cls = ee.Image(1)
+
     for threshold in INDICES[index]["thresholds"]:
         cls = cls.add(value.gt(threshold))
+
     return cls.updateMask(value.mask()).toInt8().rename("cls")
 
 
@@ -222,35 +339,105 @@ def _classify(value: ee.Image, index: str) -> ee.Image:
 def get_boundary() -> dict:
     """Límite de Perú (GeoJSON Feature, simplificado) para dibujarlo en el mapa."""
     ensure_ready()
+
     key = ("boundary",)
     cached = _cache.get(key)
+
     if cached:
         return cached
-    geom = _safe(lambda: _peru().geometry().simplify(1000).getInfo())
+
+    # Obtener la geometría simplificada de Perú desde Earth Engine.
+    geom = _safe(
+        lambda: _peru().geometry().simplify(1000).getInfo()
+    )
+
+    # Verificar que Earth Engine haya devuelto una geometría válida.
+    if not isinstance(geom, dict) or not geom.get("type"):
+        log.error(
+            "Earth Engine devolvió una geometría inválida para Perú: %s",
+            geom,
+        )
+        raise GeeError(
+            "Earth Engine no devolvió una geometría válida para Perú."
+        )
+
+    # GeoJSON puede representar una GeometryCollection de forma distinta.
+    if geom["type"] == "GeometryCollection":
+        geometries = geom.get("geometries", [])
+
+        if not geometries:
+            raise GeeError(
+                "Earth Engine devolvió una geometría vacía para Perú."
+            )
+
+        geometry = {
+            "type": "GeometryCollection",
+            "geometries": geometries,
+        }
+
+    else:
+        coordinates = geom.get("coordinates")
+
+        if coordinates is None:
+            log.error(
+                "Geometría de Perú sin coordenadas. Tipo recibido: %s",
+                geom.get("type"),
+            )
+            raise GeeError(
+                "La geometría de Perú no contiene coordenadas."
+            )
+
+        geometry = {
+            "type": geom["type"],
+            "coordinates": coordinates,
+        }
+
     feature = {
         "type": "Feature",
         "properties": {"name": "Perú"},
-        "geometry": {"type": geom["type"], "coordinates": geom["coordinates"]},
+        "geometry": geometry,
     }
-    _cache.set(key, feature, ttl=24 * 3600)
+
+    _cache.set(
+        key,
+        feature,
+        ttl=24 * 3600,
+    )
+
     return feature
 
 
-def get_tiles(index: str, start: str | None, end: str | None, max_cloud: int | None) -> dict:
+def get_tiles(
+    index: str,
+    start: str | None,
+    end: str | None,
+    max_cloud: int | None,
+) -> dict:
     """URL de teselas XYZ del índice clasificado en 5 rangos, recortado a Perú."""
     ensure_ready()
+
     key = ("tiles", index, start, end, max_cloud)
     cached = _cache.get(key)
+
     if cached:
         return cached
 
     meta = INDICES[index]
     peru = _peru().geometry()
-    value, col = _build(index, start, end, max_cloud, peru)
+
+    value, col = _build(
+        index,
+        start,
+        end,
+        max_cloud,
+        peru,
+    )
 
     scenes = None
+
     if col is not None:
         scenes = _safe(lambda: col.size().getInfo())
+
         if not scenes:
             raise NoDataError(
                 "No hay imágenes Sentinel-2 para ese período y nubosidad. "
@@ -258,30 +445,60 @@ def get_tiles(index: str, start: str | None, end: str | None, max_cloud: int | N
             )
 
     classified = _classify(value, index).clip(peru)
-    vis = {"min": 1, "max": 5, "palette": meta["palette"]}
+
+    vis = {
+        "min": 1,
+        "max": 5,
+        "palette": meta["palette"],
+    }
+
     map_id = _safe(lambda: classified.getMapId(vis))
 
     result = {
         "index": index,
         "tile_url": map_id["tile_fetcher"].url_format,
         "scenes": scenes,
-        "period": {"start": start, "end": end} if start else None,
+        "period": {
+            "start": start,
+            "end": end,
+        } if start else None,
         "classes": build_classes(index),
     }
-    _cache.set(key, result, ttl=TILE_TTL)
+
+    _cache.set(
+        key,
+        result,
+        ttl=TILE_TTL,
+    )
+
     return result
 
 
-def get_stats(index: str, start: str | None, end: str | None, max_cloud: int | None) -> dict:
+def get_stats(
+    index: str,
+    start: str | None,
+    end: str | None,
+    max_cloud: int | None,
+) -> dict:
     """Área (km²) y porcentaje por clase dentro de Perú."""
     ensure_ready()
+
     key = ("stats", index, start, end, max_cloud)
     cached = _cache.get(key)
+
     if cached:
         return cached
 
     peru = _peru().geometry()
-    value, _ = _build(index, start, end, max_cloud, peru)
+
+    value, _ = _build(
+        index,
+        start,
+        end,
+        max_cloud,
+        peru,
+    )
+
     classified = _classify(value, index).clip(peru)
 
     scale = Settings.STATS_SCALE_M
@@ -291,7 +508,10 @@ def get_stats(index: str, start: str | None, end: str | None, max_cloud: int | N
         area_km2.updateMask(classified.mask())
         .addBands(classified)
         .reduceRegion(
-            reducer=ee.Reducer.sum().group(groupField=1, groupName="cls"),
+            reducer=ee.Reducer.sum().group(
+                groupField=1,
+                groupName="cls",
+            ),
             geometry=peru,
             scale=scale,
             maxPixels=1e13,
@@ -299,6 +519,7 @@ def get_stats(index: str, start: str | None, end: str | None, max_cloud: int | N
             tileScale=8,
         )
     )
+
     total = area_km2.reduceRegion(
         reducer=ee.Reducer.sum(),
         geometry=peru,
@@ -307,60 +528,105 @@ def get_stats(index: str, start: str | None, end: str | None, max_cloud: int | N
         bestEffort=True,
         tileScale=4,
     )
+
     out = _safe(
-        lambda: ee.Dictionary({"groups": grouped.get("groups"), "total": total.get("area")}).getInfo()
+        lambda: ee.Dictionary({
+            "groups": grouped.get("groups"),
+            "total": total.get("area"),
+        }).getInfo()
     )
 
-    by_class = {int(g["cls"]): float(g["sum"]) for g in (out.get("groups") or [])}
+    by_class = {
+        int(g["cls"]): float(g["sum"])
+        for g in (out.get("groups") or [])
+    }
+
     total_km2 = float(out.get("total") or 0.0)
     valid_km2 = sum(by_class.values())
 
     classes = []
+
     for c in build_classes(index):
         area = by_class.get(c["id"], 0.0)
-        classes.append(
-            {
-                "id": c["id"],
-                "label": c["label"],
-                "range": c["range"],
-                "color": c["color"],
-                "area_km2": round(area, 1),
-                "percent": round(100.0 * area / valid_km2, 2) if valid_km2 else 0.0,
-            }
-        )
+
+        classes.append({
+            "id": c["id"],
+            "label": c["label"],
+            "range": c["range"],
+            "color": c["color"],
+            "area_km2": round(area, 1),
+            "percent": (
+                round(100.0 * area / valid_km2, 2)
+                if valid_km2
+                else 0.0
+            ),
+        })
 
     result = {
         "index": index,
         "classes": classes,
         "total_km2": round(total_km2, 1),
         "valid_km2": round(valid_km2, 1),
-        "nodata_km2": round(max(total_km2 - valid_km2, 0.0), 1),
-        "coverage_percent": round(100.0 * valid_km2 / total_km2, 1) if total_km2 else 0.0,
+        "nodata_km2": round(
+            max(total_km2 - valid_km2, 0.0),
+            1,
+        ),
+        "coverage_percent": (
+            round(100.0 * valid_km2 / total_km2, 1)
+            if total_km2
+            else 0.0
+        ),
         "scale_m": scale,
     }
+
     _cache.set(key, result)
+
     return result
 
 
 def get_pixel(
-    index: str, lat: float, lon: float, start: str | None, end: str | None, max_cloud: int | None
+    index: str,
+    lat: float,
+    lon: float,
+    start: str | None,
+    end: str | None,
+    max_cloud: int | None,
 ) -> dict:
     """Valor del índice y su clase en un punto (clic en el mapa)."""
     ensure_ready()
+
     meta = INDICES[index]
     point = ee.Geometry.Point([lon, lat])
     peru = _peru().geometry()
-    value, _ = _build(index, start, end, max_cloud, point)
-    sample = value.clip(peru).reduceRegion(
-        reducer=ee.Reducer.first(), geometry=point, scale=meta["native_scale"], maxPixels=1e6
+
+    value, _ = _build(
+        index,
+        start,
+        end,
+        max_cloud,
+        point,
     )
+
+    sample = value.clip(peru).reduceRegion(
+        reducer=ee.Reducer.first(),
+        geometry=point,
+        scale=meta["native_scale"],
+        maxPixels=1e6,
+    )
+
     raw = _safe(lambda: sample.get("v").getInfo())
 
     if raw is None:
-        return {"index": index, "value": None, "lat": lat, "lon": lon}
+        return {
+            "index": index,
+            "value": None,
+            "lat": lat,
+            "lon": lon,
+        }
 
     cls_id = classify_value(index, raw)
     cls = build_classes(index)[cls_id - 1]
+
     return {
         "index": index,
         "value": round(float(raw), 4),
