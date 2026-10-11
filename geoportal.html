@@ -1,0 +1,1217 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#093f2f">
+  <title>Geoportal de Índices de Vegetación · Perú</title>
+  <meta name="description" content="Visor de NDVI, SAVI, MSAVI, EVI y biomasa del territorio peruano en 5 rangos.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230d5c44'/%3E%3Cpath d='M32 12c-9 8-14 15-14 23 0 8 6 14 14 14s14-6 14-14c0-8-5-15-14-23z' fill='%2341ab5d'/%3E%3Cpath d='M32 22v28M32 34l-7-6M32 40l8-7' stroke='%2300441b' stroke-width='3' stroke-linecap='round' fill='none'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <style>
+/* ==========================================================================
+   Geoportal de Índices de Vegetación · Perú
+   ========================================================================== */
+
+:root {
+  --bg: #eef2f0;
+  --surface: #ffffff;
+  --ink: #13201b;
+  --muted: #5a6b63;
+  --line: #dbe4df;
+  --brand: #0d5c44;
+  --brand-dark: #093f2f;
+  --brand-soft: #e3f1ea;
+  --accent: #e8a317;
+  --danger: #a8271f;
+  --danger-soft: #fdeceb;
+  --ok: #1d7a4d;
+  --ok-soft: #e6f4ec;
+  --info: #1f4f8f;
+  --info-soft: #eaf1fb;
+  --radius: 14px;
+  --shadow: 0 1px 2px rgba(16, 32, 26, .08), 0 6px 18px rgba(16, 32, 26, .08);
+  --sidebar-w: 392px;
+  --header-h: 60px;
+  --handle-h: 58px;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body { height: 100%; margin: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  -webkit-text-size-adjust: 100%;
+  overflow: hidden;
+}
+
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
+
+button, input, select { font: inherit; color: inherit; }
+button { -webkit-tap-highlight-color: transparent; }
+:focus-visible { outline: 3px solid rgba(232, 163, 23, .75); outline-offset: 2px; }
+code { padding: 1px 5px; border-radius: 5px; background: #eef3f0; font-size: 12px; }
+
+/* ---------- Estructura (escritorio) ---------- */
+.app {
+  display: grid;
+  grid-template-columns: var(--sidebar-w) 1fr;
+  grid-template-rows: var(--header-h) 1fr;
+  grid-template-areas: "top top" "side map";
+  height: 100%;
+  height: 100dvh;
+}
+
+.topbar {
+  grid-area: top;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 0 18px; padding-top: env(safe-area-inset-top);
+  background: linear-gradient(135deg, var(--brand-dark), var(--brand));
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .18);
+  z-index: 1000;
+}
+
+.brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.brand__logo { border-radius: 9px; flex: none; }
+.brand__text { min-width: 0; }
+.brand__title {
+  margin: 0; font-size: 17px; font-weight: 650; letter-spacing: .1px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.brand__sub { margin: 0; font-size: 12px; opacity: .8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.pill {
+  display: inline-flex; align-items: center; gap: 8px; flex: none; cursor: pointer;
+  padding: 7px 12px; border-radius: 999px; font-size: 12px; font-weight: 600; color: #fff;
+  background: rgba(255, 255, 255, .14); border: 1px solid rgba(255, 255, 255, .28);
+}
+.pill:hover { background: rgba(255, 255, 255, .22); }
+.pill__dot { width: 9px; height: 9px; border-radius: 50%; background: #f1c453; }
+.pill--ok .pill__dot { background: #5ee08f; box-shadow: 0 0 0 3px rgba(94, 224, 143, .25); }
+.pill--warn .pill__dot { background: #ffb34d; box-shadow: 0 0 0 3px rgba(255, 179, 77, .28); }
+.pill--error .pill__dot { background: #ff7b72; box-shadow: 0 0 0 3px rgba(255, 123, 114, .25); }
+
+.sidebar {
+  grid-area: side;
+  min-height: 0; display: flex; flex-direction: column;
+  border-right: 1px solid var(--line);
+}
+.sidebar__body {
+  flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+  padding: 14px; display: flex; flex-direction: column; gap: 12px;
+}
+.sheet-handle { display: none; }
+
+.map-wrap { grid-area: map; position: relative; min-height: 0; z-index: 0; isolation: isolate; }
+#map { position: absolute; inset: 0; background: #dfe7e3; }
+
+/* ---------- Tarjetas ---------- */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 14px;
+  box-shadow: var(--shadow);
+  flex: none;
+}
+.card__title {
+  display: flex; align-items: center; gap: 9px;
+  margin: 0 0 12px; font-size: 14.5px; font-weight: 650;
+}
+.step {
+  display: inline-grid; place-items: center; width: 22px; height: 22px;
+  border-radius: 50%; background: var(--brand); color: #fff; font-size: 12px; font-weight: 700;
+}
+
+/* ---------- Selector de índice ---------- */
+.index-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+.index-grid .index-btn:last-child:nth-child(odd) { grid-column: 1 / -1; }
+
+.index-btn {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 1px;
+  padding: 10px 12px; text-align: left; cursor: pointer; min-height: 52px;
+  background: var(--surface); border: 1.5px solid var(--line); border-radius: 11px;
+  transition: border-color .15s, background .15s, box-shadow .15s;
+}
+.index-btn:hover { border-color: var(--brand); }
+.index-btn[aria-checked="true"] {
+  border-color: var(--brand); background: var(--brand-soft);
+  box-shadow: inset 0 0 0 1px var(--brand);
+}
+.index-btn__name { font-weight: 700; font-size: 15px; }
+.index-btn__sub { font-size: 11.5px; color: var(--muted); }
+
+.index-info {
+  margin-top: 12px; padding: 10px 12px; border-radius: 10px;
+  background: #f6f9f7; border: 1px solid var(--line); font-size: 12.5px;
+}
+.index-info p { margin: 4px 0 0; }
+.info__formula {
+  margin: 6px 0; padding: 6px 8px; border-radius: 6px; background: #fff;
+  border: 1px dashed #c8d6ce; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px; overflow-wrap: anywhere;
+}
+.info__src { color: var(--muted); font-size: 11.5px; }
+
+/* ---------- Formularios ---------- */
+.fields { border: 0; padding: 0; margin: 0; min-width: 0; display: grid; gap: 12px; }
+.fields:disabled { opacity: .45; pointer-events: none; }
+
+.presets { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  padding: 7px 12px; border-radius: 999px; cursor: pointer; font-size: 12.5px; font-weight: 600;
+  background: #fff; border: 1.5px solid var(--line); color: var(--ink);
+  transition: background .15s, border-color .15s;
+}
+.chip:hover { border-color: var(--brand); }
+.chip.is-active { background: var(--brand); border-color: var(--brand); color: #fff; }
+
+.row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: start; }
+.field { display: grid; align-content: start; gap: 5px; font-size: 12.5px; font-weight: 600; color: var(--muted); min-width: 0; }
+.field__line { display: flex; justify-content: space-between; gap: 8px; }
+.field output { color: var(--ink); font-variant-numeric: tabular-nums; }
+
+input[type="date"], input[type="url"], select {
+  width: 100%; min-width: 0; padding: 9px 10px; border-radius: 9px; background: #fff;
+  border: 1.5px solid var(--line); color: var(--ink); font-weight: 500;
+  font-size: 14px; min-height: 40px;
+}
+input[type="date"]:focus, input[type="url"]:focus, select:focus { border-color: var(--brand); outline: none; }
+
+input[type="range"] { width: 100%; accent-color: var(--brand); height: 28px; }
+
+.check { display: flex; align-items: center; gap: 9px; margin: 12px 0; font-size: 13.5px; cursor: pointer; }
+.check input { width: 18px; height: 18px; accent-color: var(--brand); }
+
+.hint { margin: 8px 0 12px; font-size: 12px; color: var(--muted); }
+.hint:empty { display: none; }
+.card .field + .field, .card .field + .check { margin-top: 12px; }
+
+/* ---------- Botones ---------- */
+.btn {
+  width: 100%; padding: 11px 14px; border-radius: 10px; cursor: pointer;
+  font-weight: 650; border: 1.5px solid transparent; min-height: 44px;
+  transition: background .15s, transform .05s, opacity .15s;
+}
+.btn:active { transform: translateY(1px); }
+.btn--primary { background: var(--brand); color: #fff; }
+.btn--primary:hover { background: var(--brand-dark); }
+.btn--primary:disabled { opacity: .6; cursor: progress; }
+.btn--ghost { background: #fff; border-color: var(--line); }
+.btn--ghost:hover { border-color: var(--brand); }
+.btn--small { width: auto; min-height: 36px; padding: 6px 12px; font-size: 12px; margin-top: 8px; }
+
+/* ---------- Estadísticas ---------- */
+.stats { display: grid; gap: 10px; }
+.muted { margin: 0; color: var(--muted); font-size: 12.5px; }
+.stat { display: grid; gap: 4px; }
+.stat__head { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+.stat__label { flex: 1; min-width: 0; }
+.stat__pct { font-weight: 700; font-variant-numeric: tabular-nums; }
+.stat__area { font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; padding-left: 22px; }
+.swatch { width: 14px; height: 14px; border-radius: 4px; border: 1px solid rgba(0, 0, 0, .25); flex: none; }
+.bar { height: 7px; margin-left: 22px; border-radius: 999px; background: #e8eeea; overflow: hidden; }
+.bar__fill { height: 100%; border-radius: 999px; transition: width .4s ease; }
+.stats__summary {
+  margin-top: 4px; padding-top: 10px; border-top: 1px solid var(--line);
+  font-size: 12px; color: var(--muted); display: grid; gap: 3px;
+}
+.stats__summary strong { color: var(--ink); }
+
+.foot { padding: 4px 4px 18px; font-size: 11.5px; color: var(--muted); }
+.foot p { margin: 4px 0; }
+
+/* ---------- Mapa ---------- */
+.spinner {
+  width: 16px; height: 16px; border-radius: 50%; flex: none;
+  border: 3px solid #cfe3d8; border-top-color: var(--brand);
+  animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.coords {
+  position: absolute; right: 10px; bottom: 28px; z-index: 800;
+  padding: 3px 8px; border-radius: 6px; font-size: 11.5px; font-variant-numeric: tabular-nums;
+  background: rgba(255, 255, 255, .9); box-shadow: var(--shadow);
+}
+.coords:empty { display: none; }
+
+.noscript { padding: 20px; }
+
+
+/* ---------- Aviso flotante sobre el mapa ---------- */
+.status {
+  position: absolute; left: 50%; bottom: 34px; transform: translateX(-50%); z-index: 1200;
+  display: flex; align-items: center; gap: 10px;
+  width: max-content; max-width: min(560px, calc(100% - 24px));
+  padding: 10px 8px 10px 14px; border-radius: 12px; font-size: 13px; font-weight: 550;
+  background: #fff; color: var(--info); border: 1px solid #cddcf2; box-shadow: var(--shadow);
+}
+.status[hidden] { display: none; }
+.status[data-kind="ok"] { color: var(--ok); border-color: #c4e4d1; background: #f3fbf6; }
+.status[data-kind="error"] { color: var(--danger); border-color: #f3c9c6; background: #fff5f4; }
+.status[data-kind="warn"] { color: #7a5200; border-color: #f0dba5; background: #fffaf0; }
+.status__text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.status__close {
+  flex: none; width: 28px; height: 28px; border: 0; border-radius: 50%; cursor: pointer;
+  background: transparent; font-size: 20px; line-height: 1; color: inherit; opacity: .7;
+}
+.status__close:hover { opacity: 1; background: rgba(0, 0, 0, .06); }
+.spinner[hidden] { display: none; }
+
+/* ---------- Franja de 5 colores y pestañas de índice ---------- */
+.strip { display: flex; width: 100%; height: 6px; margin-top: 5px; border-radius: 999px; overflow: hidden; }
+.strip > span { flex: 1; }
+
+.tabs {
+  position: absolute; top: 10px; left: 10px; right: 10px; z-index: 1000;
+  display: none; gap: 8px; overflow-x: auto; padding: 2px 2px 6px;
+  scrollbar-width: none; -webkit-overflow-scrolling: touch;
+}
+.tabs::-webkit-scrollbar { display: none; }
+.tab {
+  flex: none; min-width: 74px; padding: 8px 12px 7px; cursor: pointer; text-align: center;
+  background: rgba(255, 255, 255, .96); border: 1.5px solid transparent; border-radius: 12px;
+  box-shadow: var(--shadow); transition: border-color .15s, background .15s;
+}
+.tab__name { display: block; font-weight: 700; font-size: 13.5px; }
+.tab[aria-checked="true"] { background: var(--brand); color: #fff; border-color: var(--brand-dark); }
+.tab[aria-checked="true"] .strip { box-shadow: 0 0 0 1px rgba(255, 255, 255, .6); }
+
+/* ---------- Leyenda plegable (arriba a la derecha) ---------- */
+.legend {
+  min-width: 176px; border-radius: 12px; font-size: 12px; line-height: 1.3;
+  background: rgba(255, 255, 255, .97); box-shadow: var(--shadow); overflow: hidden;
+}
+.legend__head {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%;
+  padding: 9px 11px; border: 0; background: transparent; cursor: pointer; text-align: left;
+}
+.legend__title { font-weight: 700; font-size: 12.5px; }
+.legend__chev {
+  width: 8px; height: 8px; border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted);
+  transform: rotate(45deg) translate(-2px, -2px); transition: transform .2s; flex: none;
+}
+.legend.is-collapsed .legend__chev { transform: rotate(-45deg); }
+.legend__rows { padding: 0 11px 9px; }
+.legend.is-collapsed .legend__rows { display: none; }
+.legend__row { display: flex; align-items: center; gap: 8px; padding: 2px 0; }
+.legend__text { display: grid; }
+.legend__range { font-weight: 600; font-variant-numeric: tabular-nums; }
+.legend__label { font-size: 11px; color: var(--muted); }
+
+.index-btn .strip { margin-top: 6px; }
+
+/* Ventana emergente de valor puntual */
+.popup { min-width: 170px; font-size: 13px; }
+.popup__title { font-weight: 700; margin-bottom: 4px; }
+.popup__value { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.popup__class { display: flex; align-items: center; gap: 7px; margin-top: 4px; }
+.popup__meta { margin-top: 6px; font-size: 11px; color: var(--muted); }
+.popup--error { color: var(--danger); }
+
+/* ---------- Ventana de configuración ---------- */
+.modal {
+  position: fixed; inset: 0; z-index: 2000; display: grid; place-items: center; padding: 16px;
+  background: rgba(10, 25, 20, .55);
+}
+.modal[hidden] { display: none; }
+.modal__box {
+  width: min(460px, 100%); max-height: 100%; overflow-y: auto;
+  background: #fff; border-radius: 16px; padding: 18px; box-shadow: 0 20px 50px rgba(0, 0, 0, .35);
+}
+.modal__box h2 { margin: 0 0 8px; font-size: 17px; }
+.modal__lead { margin: 0 0 14px; color: var(--muted); font-size: 13px; }
+.modal__msg { margin: 10px 0 0; min-height: 18px; font-size: 12.5px; color: var(--muted); }
+.modal__msg[data-kind="error"] { color: var(--danger); }
+.modal__msg[data-kind="ok"] { color: var(--ok); font-weight: 600; }
+.link-btn {
+  display: block; margin: 12px auto 0; padding: 6px; border: 0; background: none; cursor: pointer;
+  color: var(--brand); font-size: 12.5px; font-weight: 600; text-decoration: underline;
+}
+.link-btn[hidden] { display: none; }
+.modal__actions { display: grid; grid-template-columns: 1fr 1.4fr; gap: 10px; margin-top: 14px; }
+
+/* ---------- Móvil: mapa a pantalla completa + panel deslizable ---------- */
+@media (max-width: 900px) {
+  :root { --header-h: 54px; }
+
+  .app { display: block; position: relative; height: 100%; height: 100dvh; }
+
+  .topbar { position: absolute; top: 0; left: 0; right: 0; height: calc(var(--header-h) + env(safe-area-inset-top)); padding: env(safe-area-inset-top) 12px 0; }
+  .brand__sub { display: none; }
+  .brand__title { font-size: 14.5px; line-height: 1.15; white-space: normal; overflow: visible; }
+  #gee-pill-text { max-width: 128px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .brand__logo { width: 30px; height: 30px; }
+
+  .map-wrap {
+    position: absolute; left: 0; right: 0;
+    top: calc(var(--header-h) + env(safe-area-inset-top));
+    bottom: calc(var(--handle-h) + env(safe-area-inset-bottom));
+  }
+
+  .sidebar {
+    position: absolute; left: 0; right: 0; bottom: 0; z-index: 1100;
+    height: min(78dvh, 640px);
+    background: var(--bg);
+    border: 0; border-radius: 20px 20px 0 0;
+    box-shadow: 0 -6px 24px rgba(0, 0, 0, .22);
+    transform: translateY(calc(100% - var(--handle-h) - env(safe-area-inset-bottom)));
+    transition: transform .28s cubic-bezier(.2, .8, .2, 1);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .sidebar.is-open { transform: none; }
+
+  .sheet-handle {
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+    flex: none; width: 100%; height: var(--handle-h); cursor: pointer;
+    background: transparent; border: 0; padding: 0;
+  }
+  .sheet-handle__bar { width: 42px; height: 5px; border-radius: 999px; background: #b7c5bd; }
+  .sheet-handle__text { font-weight: 650; font-size: 14px; color: var(--brand-dark); }
+
+  .sidebar__body { padding: 4px 12px 16px; }
+  .coords { display: none; }
+  .tabs { display: flex; }
+  .leaflet-top.leaflet-left, .leaflet-top.leaflet-right { margin-top: 56px; }
+  .legend { min-width: 150px; }
+  .status { bottom: 12px; }
+  .leaflet-control-zoom { display: none; }
+  .modal { align-items: end; padding: 0; }
+  .modal__box { border-radius: 18px 18px 0 0; width: 100%; padding-bottom: calc(18px + env(safe-area-inset-bottom)); }
+}
+
+@media (max-width: 380px) {
+  .row { grid-template-columns: 1fr; }
+  .pill__text-long { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}
+
+</style>
+</head>
+<body>
+  <div class="app">
+
+    <header class="topbar">
+      <div class="brand">
+        <svg class="brand__logo" viewBox="0 0 64 64" width="34" height="34" aria-hidden="true">
+          <rect width="64" height="64" rx="14" fill="#ffffff" fill-opacity=".16"/>
+          <path d="M32 12c-9 8-14 15-14 23 0 8 6 14 14 14s14-6 14-14c0-8-5-15-14-23z" fill="#5ee08f"/>
+          <path d="M32 22v28M32 34l-7-6M32 40l8-7" stroke="#093f2f" stroke-width="3" stroke-linecap="round" fill="none"/>
+        </svg>
+        <div class="brand__text">
+          <h1 class="brand__title">Geoportal de Vegetación · Perú</h1>
+          <p class="brand__sub">NDVI · SAVI · MSAVI · EVI · Biomasa</p>
+        </div>
+      </div>
+      <button type="button" id="gee-pill" class="pill pill--wait" title="Configurar servidor">
+        <span class="pill__dot" aria-hidden="true"></span>
+        <span id="gee-pill-text">Conectando…</span>
+      </button>
+    </header>
+
+    <main class="map-wrap">
+      <div id="map" aria-label="Mapa interactivo del Perú"></div>
+
+      <!-- Selector rápido de índice (solo móvil) -->
+      <div id="index-tabs" class="tabs" role="radiogroup" aria-label="Cambiar índice"></div>
+
+      <div id="coords" class="coords" aria-hidden="true"></div>
+
+      <div id="status" class="status" role="status" aria-live="polite" hidden>
+        <span id="status-spinner" class="spinner" aria-hidden="true" hidden></span>
+        <span id="status-text" class="status__text"></span>
+        <button type="button" id="status-close" class="status__close" aria-label="Cerrar aviso">×</button>
+      </div>
+
+      <noscript><p class="noscript">Este geoportal requiere JavaScript.</p></noscript>
+    </main>
+
+    <aside class="sidebar" id="sidebar" aria-label="Panel de control">
+      <button type="button" id="sheet-toggle" class="sheet-handle" aria-expanded="false" aria-controls="sidebar-body">
+        <span class="sheet-handle__bar" aria-hidden="true"></span>
+        <span class="sheet-handle__text">Panel de control</span>
+      </button>
+
+      <div class="sidebar__body" id="sidebar-body">
+
+        <section class="card">
+          <h2 class="card__title"><span class="step">1</span> Índice o producto</h2>
+          <div id="index-list" class="index-grid" role="radiogroup" aria-label="Seleccione el índice"></div>
+          <div id="index-info" class="index-info" aria-live="polite"></div>
+        </section>
+
+        <section class="card">
+          <h2 class="card__title"><span class="step">2</span> Período de análisis</h2>
+          <fieldset id="period-fields" class="fields">
+            <legend class="sr-only">Parámetros temporales</legend>
+            <div class="presets" role="group" aria-label="Rangos rápidos">
+              <button type="button" class="chip" data-days="30">30 días</button>
+              <button type="button" class="chip" data-days="90">3 meses</button>
+              <button type="button" class="chip" data-days="180">6 meses</button>
+              <button type="button" class="chip" data-days="365">12 meses</button>
+            </div>
+            <div class="row">
+              <label class="field">Desde
+                <input type="date" id="start" min="2018-01-01">
+              </label>
+              <label class="field">Hasta
+                <input type="date" id="end">
+              </label>
+            </div>
+            <label class="field">
+              <span class="field__line">Nubosidad máxima por escena <output id="cloud-out" for="cloud">30 %</output></span>
+              <input type="range" id="cloud" min="0" max="100" step="5" value="30">
+            </label>
+          </fieldset>
+          <p class="hint" id="period-hint"></p>
+          <button type="button" id="apply" class="btn btn--primary">Visualizar en el mapa</button>
+        </section>
+
+        <section class="card">
+          <h2 class="card__title"><span class="step">3</span> Visualización</h2>
+          <label class="field">
+            <span class="field__line">Opacidad de la capa <output id="opacity-out" for="opacity">85 %</output></span>
+            <input type="range" id="opacity" min="20" max="100" step="5" value="85">
+          </label>
+          <label class="field">Mapa base
+            <select id="basemap"></select>
+          </label>
+          <label class="check">
+            <input type="checkbox" id="toggle-boundary" checked>
+            <span>Mostrar límite de Perú</span>
+          </label>
+          <button type="button" id="reset-view" class="btn btn--ghost">Centrar en Perú</button>
+        </section>
+
+        <section class="card">
+          <h2 class="card__title"><span class="step">4</span> Área por rango en Perú</h2>
+          <div id="stats" class="stats" aria-live="polite">
+            <p class="muted">Las estadísticas aparecerán al visualizar una capa.</p>
+          </div>
+        </section>
+
+        <footer class="foot">
+          <p>Datos: Copernicus Sentinel-2 (ESA) · NASA ORNL DAAC · USDOS LSIB. Procesamiento: Google Earth Engine.</p>
+          <p>Toque el mapa para consultar el valor de un punto.</p>
+        </footer>
+      </div>
+    </aside>
+
+  </div>
+
+  <!-- Configuración del servidor -->
+  <div id="server-modal" class="modal" hidden>
+    <form id="server-form" class="modal__box" role="dialog" aria-modal="true" aria-labelledby="server-title" novalidate>
+      <h2 id="server-title">Conexión con el servidor</h2>
+      <p class="modal__lead">
+        Este visor consulta un servidor Python (Flask + Google Earth Engine) que calcula los índices.
+        Escriba la dirección donde está en ejecución.
+      </p>
+      <label class="field">Dirección del servidor
+        <input type="url" id="server-url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false"
+               placeholder="https://mi-geoportal.onrender.com">
+      </label>
+      <p class="hint">Ejemplos: <code>http://192.168.1.20:8080</code> (su PC, en la misma red Wi-Fi) o la dirección donde publicó el servidor.</p>
+      <p id="server-msg" class="modal__msg" role="status"></p>
+      <div class="modal__actions">
+        <button type="button" id="server-close" class="btn btn--ghost">Cerrar</button>
+        <button type="submit" class="btn btn--primary">Probar y guardar</button>
+      </div>
+      <button type="button" id="server-reset" class="link-btn" hidden>Usar el servidor de esta página</button>
+    </form>
+  </div>
+
+  <script>
+window.GEOPORTAL_CONFIG = {"view": {"center": [-9.19, -75.02], "zoom": 5, "bounds": [[-18.4, -81.4], [-0.03, -68.6]], "max_bounds": [[-20.5, -84.0], [2.5, -66.0]]}, "defaults": {"cloud": 30, "range_days": 90, "max_range_days": 366, "stats_scale_m": 1000}, "indices": [{"key": "NDVI", "name": "NDVI", "short": "Vigor vegetal", "full_name": "Índice de Vegetación de Diferencia Normalizada", "formula": "(NIR − RED) / (NIR + RED)", "source": "Copernicus Sentinel-2 SR Harmonizado, 10 m (composición de mediana)", "note": "Indicador general del vigor y la densidad de la vegetación verde.", "unit": "", "decimals": 2, "temporal": true, "classes": [{"id": 1, "label": "Muy baja", "description": "Agua, nieve, roca o suelo desnudo", "range": "≤ 0,10", "color": "#8c510a", "min": null, "max": 0.1}, {"id": 2, "label": "Baja", "description": "Vegetación escasa o muy dispersa", "range": "0,10 – 0,30", "color": "#dfc27d", "min": 0.1, "max": 0.3}, {"id": 3, "label": "Moderada", "description": "Vegetación moderada (pastizal, matorral, cultivos)", "range": "0,30 – 0,50", "color": "#c7e9b4", "min": 0.3, "max": 0.5}, {"id": 4, "label": "Alta", "description": "Vegetación densa", "range": "0,50 – 0,70", "color": "#41ab5d", "min": 0.5, "max": 0.7}, {"id": 5, "label": "Muy alta", "description": "Vegetación muy densa (bosque húmedo)", "range": "> 0,70", "color": "#00441b", "min": 0.7, "max": null}]}, {"key": "SAVI", "name": "SAVI", "short": "Ajuste de suelo", "full_name": "Índice de Vegetación Ajustado al Suelo", "formula": "(1 + L) · (NIR − RED) / (NIR + RED + L),  L = 0,5", "source": "Copernicus Sentinel-2 SR Harmonizado, 10 m (composición de mediana)", "note": "Reduce la influencia del brillo del suelo; útil en zonas de vegetación dispersa.", "unit": "", "decimals": 2, "temporal": true, "classes": [{"id": 1, "label": "Muy baja", "description": "Agua, nieve, roca o suelo desnudo", "range": "≤ 0,10", "color": "#8c510a", "min": null, "max": 0.1}, {"id": 2, "label": "Baja", "description": "Vegetación escasa o muy dispersa", "range": "0,10 – 0,25", "color": "#dfc27d", "min": 0.1, "max": 0.25}, {"id": 3, "label": "Moderada", "description": "Vegetación moderada (pastizal, matorral, cultivos)", "range": "0,25 – 0,40", "color": "#c7e9b4", "min": 0.25, "max": 0.4}, {"id": 4, "label": "Alta", "description": "Vegetación densa", "range": "0,40 – 0,55", "color": "#41ab5d", "min": 0.4, "max": 0.55}, {"id": 5, "label": "Muy alta", "description": "Vegetación muy densa (bosque húmedo)", "range": "> 0,55", "color": "#00441b", "min": 0.55, "max": null}]}, {"key": "MSAVI", "name": "MSAVI", "short": "Suelo modificado", "full_name": "Índice de Vegetación Ajustado al Suelo Modificado", "formula": "(2·NIR + 1 − √((2·NIR + 1)² − 8·(NIR − RED))) / 2", "source": "Copernicus Sentinel-2 SR Harmonizado, 10 m (composición de mediana)", "note": "Variante de SAVI que ajusta automáticamente el factor de suelo.", "unit": "", "decimals": 2, "temporal": true, "classes": [{"id": 1, "label": "Muy baja", "description": "Agua, nieve, roca o suelo desnudo", "range": "≤ 0,10", "color": "#8c510a", "min": null, "max": 0.1}, {"id": 2, "label": "Baja", "description": "Vegetación escasa o muy dispersa", "range": "0,10 – 0,25", "color": "#dfc27d", "min": 0.1, "max": 0.25}, {"id": 3, "label": "Moderada", "description": "Vegetación moderada (pastizal, matorral, cultivos)", "range": "0,25 – 0,40", "color": "#c7e9b4", "min": 0.25, "max": 0.4}, {"id": 4, "label": "Alta", "description": "Vegetación densa", "range": "0,40 – 0,55", "color": "#41ab5d", "min": 0.4, "max": 0.55}, {"id": 5, "label": "Muy alta", "description": "Vegetación muy densa (bosque húmedo)", "range": "> 0,55", "color": "#00441b", "min": 0.55, "max": null}]}, {"key": "EVI", "name": "EVI", "short": "Vegetación mejorada", "full_name": "Índice de Vegetación Mejorado", "formula": "2,5 · (NIR − RED) / (NIR + 6·RED − 7,5·BLUE + 1)", "source": "Copernicus Sentinel-2 SR Harmonizado, 10 m (composición de mediana)", "note": "Menos saturado que NDVI en bosques densos y corrige efectos atmosféricos.", "unit": "", "decimals": 2, "temporal": true, "classes": [{"id": 1, "label": "Muy baja", "description": "Agua, nieve, roca o suelo desnudo", "range": "≤ 0,10", "color": "#8c510a", "min": null, "max": 0.1}, {"id": 2, "label": "Baja", "description": "Vegetación escasa o muy dispersa", "range": "0,10 – 0,25", "color": "#dfc27d", "min": 0.1, "max": 0.25}, {"id": 3, "label": "Moderada", "description": "Vegetación moderada (pastizal, matorral, cultivos)", "range": "0,25 – 0,40", "color": "#c7e9b4", "min": 0.25, "max": 0.4}, {"id": 4, "label": "Alta", "description": "Vegetación densa", "range": "0,40 – 0,60", "color": "#41ab5d", "min": 0.4, "max": 0.6}, {"id": 5, "label": "Muy alta", "description": "Vegetación muy densa (bosque húmedo)", "range": "> 0,60", "color": "#00441b", "min": 0.6, "max": null}]}, {"key": "BIOMASA", "name": "Biomasa", "short": "Biomasa aérea", "full_name": "Biomasa aérea (AGB)", "formula": "Densidad de biomasa aérea en Mg/ha (producto de referencia)", "source": "NASA ORNL DAAC - Biomass Carbon Density (≈2010, 300 m)", "note": "Producto estático de referencia: no depende del período de fechas.", "unit": "Mg/ha", "decimals": 0, "temporal": false, "classes": [{"id": 1, "label": "Muy baja", "description": "Sin cobertura leñosa o muy escasa", "range": "≤ 25 Mg/ha", "color": "#ffffb2", "min": null, "max": 25}, {"id": 2, "label": "Baja", "description": "Biomasa baja (pastizal, matorral)", "range": "25 – 75 Mg/ha", "color": "#c2e699", "min": 25, "max": 75}, {"id": 3, "label": "Moderada", "description": "Biomasa media (bosque seco o secundario)", "range": "75 – 150 Mg/ha", "color": "#78c679", "min": 75, "max": 150}, {"id": 4, "label": "Alta", "description": "Biomasa alta (bosque denso)", "range": "150 – 250 Mg/ha", "color": "#238443", "min": 150, "max": 250}, {"id": 5, "label": "Muy alta", "description": "Biomasa muy alta (bosque húmedo maduro)", "range": "> 250 Mg/ha", "color": "#004529", "min": 250, "max": null}]}]};
+window.GEOPORTAL_API_BASE = "";
+</script>
+<script>
+/* ==========================================================================
+   Geoportal de Índices de Vegetación · Perú — lógica del visor
+   Funciona servido por Flask o como archivo HTML independiente
+   (en ese caso se conecta a un servidor configurable).
+   ========================================================================== */
+(function () {
+  "use strict";
+
+  // ------------------------------------------------------------------ utils
+  const $ = (sel, root = document) => root.querySelector(sel);
+
+  function el(tag, props = {}, children = []) {
+    const node = document.createElement(tag);
+    for (const [key, value] of Object.entries(props)) {
+      if (value === false || value == null) continue;
+      if (key === "class") node.className = value;
+      else if (key === "text") node.textContent = value;
+      else if (key === "dataset") Object.assign(node.dataset, value);
+      else node.setAttribute(key, value === true ? "" : value);
+    }
+    for (const child of [].concat(children)) {
+      if (child == null) continue;
+      node.append(child.nodeType ? child : document.createTextNode(child));
+    }
+    return node;
+  }
+
+  const swatch = (color) => {
+    const node = el("span", { class: "swatch" });
+    node.style.background = color;
+    return node;
+  };
+
+  const strip = (classes) => {
+    const node = el("span", { class: "strip", "aria-hidden": "true" });
+    for (const c of classes) {
+      const part = el("span");
+      part.style.background = c.color;
+      node.append(part);
+    }
+    return node;
+  };
+
+  const pad = (n) => String(n).padStart(2, "0");
+  const toISO = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const daysBetween = (a, b) => Math.round((Date.parse(b) - Date.parse(a)) / 86400000);
+  const isMobile = () => window.matchMedia("(max-width: 900px)").matches;
+  const abort = (ctl) => { if (ctl) ctl.abort(); };
+
+  const fmtKm2 = new Intl.NumberFormat("es-PE", { maximumFractionDigits: 0 });
+  const fmtPct = new Intl.NumberFormat("es-PE", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+
+  // ------------------------------------------------------------ constantes
+  const FALLBACK = {
+    js: "https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js",
+    css: "https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css",
+  };
+
+  const BASEMAPS = {
+    "Mapa claro": {
+      url: "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
+      options: { subdomains: "abcd", maxZoom: 19, attribution: "&copy; OpenStreetMap &copy; CARTO" },
+    },
+    "Calles (OpenStreetMap)": {
+      url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+      options: { maxZoom: 19, attribution: "&copy; OpenStreetMap contributors" },
+    },
+    "Satélite (Esri)": {
+      url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+      options: { maxZoom: 18, attribution: "Imágenes &copy; Esri, Maxar, Earthstar Geographics" },
+    },
+  };
+
+  const IS_HTTP = /^https?:$/.test(window.location.protocol);
+  const STORE_KEY = "geoportal.api";
+
+  function readStore() { try { return window.localStorage.getItem(STORE_KEY) || ""; } catch (_) { return ""; } }
+  function writeStore(value) {
+    try { value ? window.localStorage.setItem(STORE_KEY, value) : window.localStorage.removeItem(STORE_KEY); } catch (_) { /* sin almacenamiento */ }
+  }
+
+  // Dirección del servidor: la inyectada al generar el HTML, la guardada por el
+  // usuario o, si la página la sirve Flask, el mismo origen (cadena vacía).
+  let apiBase = (readStore() || window.GEOPORTAL_API_BASE || "").replace(/\/+$/, "");
+
+  const state = {
+    config: null,
+    map: null,
+    indexKey: null,
+    layer: null,
+    boundary: null,
+    baseLayer: null,
+    legendEl: null,
+    lastParams: null,
+    seq: 0,
+    tileErrors: 0,
+    statusTimer: null,
+    modalShown: false,
+    ctl: { tiles: null, stats: null, pixel: null },
+  };
+
+  const currentIndex = () => state.config.indices.find((i) => i.key === state.indexKey);
+
+  // --------------------------------------------------------------- Leaflet
+  function ensureLeaflet() {
+    if (window.L) return Promise.resolve();
+    document.head.append(el("link", { rel: "stylesheet", href: FALLBACK.css }));
+    return new Promise((resolve, reject) => {
+      const script = el("script", { src: FALLBACK.js });
+      script.onload = resolve;
+      script.onerror = () => reject(new Error("No se pudo cargar la librería de mapas (Leaflet). Revise su conexión a Internet."));
+      document.head.append(script);
+    });
+  }
+
+  // ------------------------------------------------------------------- API
+  function noServer(message) {
+    const err = new Error(message);
+    err.code = "NO_SERVER";
+    return err;
+  }
+
+  async function api(path, params, signal, timeoutMs) {
+    if (!IS_HTTP && !apiBase) throw noServer("No hay un servidor configurado.");
+    const query = params ? "?" + new URLSearchParams(params).toString() : "";
+
+    const ctl = new AbortController();
+    const relay = () => ctl.abort();
+    if (signal) signal.addEventListener("abort", relay);
+    let timedOut = false;
+    const timer = timeoutMs ? setTimeout(() => { timedOut = true; ctl.abort(); }, timeoutMs) : null;
+
+    let res;
+    try {
+      res = await fetch(apiBase + path + query, { signal: ctl.signal, headers: { Accept: "application/json" } });
+    } catch (err) {
+      if (signal && signal.aborted) throw err; // cancelado a propósito
+      throw noServer(timedOut ? "El servidor no respondió a tiempo." : "No se pudo contactar con el servidor.");
+    } finally {
+      if (timer) clearTimeout(timer);
+      if (signal) signal.removeEventListener("abort", relay);
+    }
+
+    let data = null;
+    try { data = await res.json(); } catch (_) { /* respuesta sin JSON */ }
+    if (!res.ok) throw new Error((data && data.error) || `Error del servidor (${res.status}).`);
+    return data;
+  }
+
+  // ---------------------------------------------------------------- estado UI
+  function setStatus(message, kind = "info", busy = false) {
+    const box = $("#status");
+    clearTimeout(state.statusTimer);
+    if (!message) { box.hidden = true; return; }
+    $("#status-text").textContent = message;
+    $("#status-spinner").hidden = !busy;
+    box.dataset.kind = kind;
+    box.hidden = false;
+    if (kind === "ok") state.statusTimer = setTimeout(() => { box.hidden = true; }, 9000);
+  }
+
+  function setBusy(busy) {
+    const btn = $("#apply");
+    btn.disabled = busy;
+    btn.textContent = busy ? "Procesando…" : "Visualizar en el mapa";
+  }
+
+  function setPill(kind, detail) {
+    const pill = $("#gee-pill");
+    const map = {
+      wait: ["pill--wait", "Conectando…"],
+      ok: ["pill--ok", "Earth Engine conectado"],
+      nogee: ["pill--warn", "Servidor sin Earth Engine"],
+      noserver: ["pill--error", "Sin servidor"],
+    };
+    const [cls, text] = map[kind];
+    pill.className = "pill " + cls;
+    $("#gee-pill-text").textContent = text;
+    pill.title = detail || "Configurar servidor";
+  }
+
+  function setSheet(open) {
+    $("#sidebar").classList.toggle("is-open", open);
+    $("#sheet-toggle").setAttribute("aria-expanded", String(open));
+  }
+
+  // ------------------------------------------------------------- índices UI
+  function renderIndexList() {
+    const grid = $("#index-list");
+    const tabs = $("#index-tabs");
+    grid.replaceChildren();
+    tabs.replaceChildren();
+    for (const idx of state.config.indices) {
+      const card = el(
+        "button",
+        { type: "button", class: "index-btn", role: "radio", "aria-checked": "false", dataset: { key: idx.key } },
+        [
+          el("span", { class: "index-btn__name", text: idx.name }),
+          el("span", { class: "index-btn__sub", text: idx.short }),
+          strip(idx.classes),
+        ]
+      );
+      card.addEventListener("click", () => selectIndex(idx.key, true));
+      grid.append(card);
+
+      const tab = el(
+        "button",
+        { type: "button", class: "tab", role: "radio", "aria-checked": "false", dataset: { key: idx.key } },
+        [el("span", { class: "tab__name", text: idx.name }), strip(idx.classes)]
+      );
+      tab.addEventListener("click", () => selectIndex(idx.key, true));
+      tabs.append(tab);
+    }
+  }
+
+  function renderIndexInfo() {
+    const idx = currentIndex();
+    $("#index-info").replaceChildren(
+      el("strong", { text: idx.full_name }),
+      el("div", { class: "info__formula", text: idx.formula }),
+      el("p", { text: idx.note }),
+      el("p", { class: "info__src", text: "Fuente: " + idx.source })
+    );
+  }
+
+  function renderLegend() {
+    const box = state.legendEl;
+    if (!box) return;
+    const idx = currentIndex();
+    const title = idx.unit ? `${idx.name} (${idx.unit})` : idx.name;
+
+    const head = el("button", { type: "button", class: "legend__head", "aria-expanded": String(!box.classList.contains("is-collapsed")) }, [
+      el("span", { class: "legend__title", text: title }),
+      el("span", { class: "legend__chev", "aria-hidden": "true" }),
+    ]);
+    head.addEventListener("click", () => {
+      const collapsed = box.classList.toggle("is-collapsed");
+      head.setAttribute("aria-expanded", String(!collapsed));
+    });
+
+    const rows = el("div", { class: "legend__rows" });
+    for (const c of idx.classes.slice().reverse()) {
+      rows.append(
+        el("div", { class: "legend__row" }, [
+          swatch(c.color),
+          el("div", { class: "legend__text" }, [
+            el("span", { class: "legend__range", text: c.range }),
+            el("span", { class: "legend__label", text: c.label }),
+          ]),
+        ])
+      );
+    }
+    box.replaceChildren(head, rows);
+  }
+
+  function selectIndex(key, load) {
+    state.indexKey = key;
+    for (const btn of document.querySelectorAll(".index-btn, .tab")) {
+      const active = btn.dataset.key === key;
+      btn.setAttribute("aria-checked", String(active));
+      if (active && btn.classList.contains("tab")) btn.scrollIntoView({ block: "nearest", inline: "center" });
+    }
+    const idx = currentIndex();
+    renderIndexInfo();
+    renderLegend();
+    $("#period-fields").disabled = !idx.temporal;
+    $("#period-hint").textContent = idx.temporal
+      ? ""
+      : "La biomasa aérea es un producto estático de referencia (≈2010): no depende del período ni de la nubosidad.";
+    if (load) loadLayer();
+  }
+
+  // ---------------------------------------------------------------- período
+  function applyPreset(days) {
+    const end = new Date();
+    const start = new Date();
+    start.setDate(end.getDate() - days);
+    $("#start").value = toISO(start);
+    $("#end").value = toISO(end);
+    for (const chip of document.querySelectorAll(".chip")) {
+      chip.classList.toggle("is-active", Number(chip.dataset.days) === days);
+    }
+  }
+
+  function clearPresetMarks() {
+    for (const chip of document.querySelectorAll(".chip")) chip.classList.remove("is-active");
+  }
+
+  function currentParams() {
+    const idx = currentIndex();
+    const params = { index: idx.key };
+    if (idx.temporal) {
+      params.start = $("#start").value;
+      params.end = $("#end").value;
+      params.cloud = $("#cloud").value;
+    }
+    return params;
+  }
+
+  function validateParams(p) {
+    if (!currentIndex().temporal) return null;
+    if (!p.start || !p.end) return "Seleccione las fechas inicial y final.";
+    if (p.end < p.start) return "La fecha final debe ser igual o posterior a la inicial.";
+    const max = state.config.defaults.max_range_days;
+    if (daysBetween(p.start, p.end) > max) return `El período máximo es de ${max} días.`;
+    return null;
+  }
+
+  // ------------------------------------------------------------------ capa
+  const opacityValue = () => Number($("#opacity").value) / 100;
+
+  function swapLayer(url) {
+    const previous = state.layer;
+    state.tileErrors = 0;
+    const layer = L.tileLayer(url, { opacity: opacityValue(), maxZoom: 16, zIndex: 10, updateWhenIdle: true });
+    layer.on("tileerror", () => {
+      state.tileErrors += 1;
+      if (state.tileErrors === 8) {
+        setStatus("Algunas teselas no se pudieron cargar. Si continúa, pulse «Visualizar» de nuevo.", "warn");
+      }
+    });
+    layer.once("load", () => { if (previous) state.map.removeLayer(previous); });
+    layer.addTo(state.map);
+    state.layer = layer;
+  }
+
+  function describeResult(data) {
+    const idx = currentIndex();
+    if (!idx.temporal) return `${idx.name}: producto de referencia (≈2010) cargado.`;
+    const scenes = data.scenes ? ` · ${fmtKm2.format(data.scenes)} escenas Sentinel-2` : "";
+    return `${idx.name} · ${data.period.start} → ${data.period.end}${scenes}`;
+  }
+
+  async function loadLayer() {
+    const params = currentParams();
+    const problem = validateParams(params);
+    if (problem) { setStatus(problem, "error"); if (isMobile()) setSheet(true); return; }
+
+    const token = ++state.seq;
+    abort(state.ctl.tiles); abort(state.ctl.stats); abort(state.ctl.pixel);
+    state.ctl.tiles = new AbortController();
+    state.map.closePopup();
+    if (isMobile()) setSheet(false);
+    setBusy(true);
+    setStatus("Procesando la composición en Google Earth Engine. Puede tardar unos segundos…", "info", true);
+
+    try {
+      const data = await api("/api/tiles", params, state.ctl.tiles.signal);
+      if (token !== state.seq) return;
+      swapLayer(data.tile_url);
+      state.lastParams = params;
+      setBusy(false);
+      setPill("ok");
+      setStatus(describeResult(data), "ok");
+      loadStats(params, token);
+    } catch (err) {
+      if (err.name === "AbortError" || token !== state.seq) return;
+      setBusy(false);
+      if (err.code === "NO_SERVER") {
+        setPill("noserver");
+        setStatus("No hay conexión con el servidor del geoportal.", "warn");
+        openModal();
+      } else {
+        setStatus(err.message, "error");
+      }
+    }
+  }
+
+  async function loadBoundary() {
+    if (state.boundary) return;
+    try {
+      const feature = await api("/api/boundary", null, null, 60000);
+      state.boundary = L.geoJSON(feature, {
+        pane: "boundaryPane",
+        interactive: false,
+        style: { color: "#f4a300", weight: 2, fill: false, opacity: 0.95 },
+      });
+      if ($("#toggle-boundary").checked) state.boundary.addTo(state.map);
+    } catch (err) {
+      console.warn("No se pudo cargar el límite de Perú:", err.message);
+    }
+  }
+
+  // ---------------------------------------------------------- estadísticas
+  function renderStats(s) {
+    const box = $("#stats");
+    box.replaceChildren();
+    for (const c of s.classes.slice().reverse()) {
+      const fill = el("div", { class: "bar__fill" });
+      fill.style.width = `${Math.min(c.percent, 100)}%`;
+      fill.style.background = c.color;
+      box.append(
+        el("div", { class: "stat" }, [
+          el("div", { class: "stat__head" }, [
+            swatch(c.color),
+            el("span", { class: "stat__label", text: `${c.label} (${c.range})` }),
+            el("span", { class: "stat__pct", text: `${fmtPct.format(c.percent)} %` }),
+          ]),
+          el("div", { class: "bar" }, [fill]),
+          el("div", { class: "stat__area", text: `${fmtKm2.format(c.area_km2)} km²` }),
+        ])
+      );
+    }
+    const summary = el("div", { class: "stats__summary" }, [
+      el("span", {}, [
+        "Área con datos: ",
+        el("strong", { text: `${fmtKm2.format(s.valid_km2)} km²` }),
+        ` (${fmtPct.format(s.coverage_percent)} % de Perú)`,
+      ]),
+    ]);
+    if (s.nodata_km2 > 0) {
+      summary.append(el("span", { text: `Sin datos (nubes o sin imágenes): ${fmtKm2.format(s.nodata_km2)} km²` }));
+    }
+    summary.append(el("span", { text: `Porcentajes sobre el área con datos · cálculo a ${fmtKm2.format(s.scale_m)} m de resolución.` }));
+    box.append(summary);
+  }
+
+  async function loadStats(params, token) {
+    const box = $("#stats");
+    abort(state.ctl.stats);
+    state.ctl.stats = new AbortController();
+    box.replaceChildren(el("p", { class: "muted", text: "Calculando área por rango…" }));
+    try {
+      const data = await api("/api/stats", params, state.ctl.stats.signal);
+      if (token !== state.seq) return;
+      renderStats(data);
+    } catch (err) {
+      if (err.name === "AbortError" || token !== state.seq) return;
+      const retry = el("button", { type: "button", class: "btn btn--ghost btn--small", text: "Reintentar" });
+      retry.addEventListener("click", () => loadStats(params, token));
+      box.replaceChildren(el("p", { class: "muted", text: "No se pudieron calcular las estadísticas: " + err.message }), retry);
+    }
+  }
+
+  // ------------------------------------------------------------ valor puntual
+  function renderPixel(d) {
+    const idx = currentIndex();
+    const coords = `${d.lat.toFixed(4)}°, ${d.lon.toFixed(4)}°`;
+    if (d.value == null) {
+      return el("div", { class: "popup" }, [
+        el("div", { class: "popup__title", text: idx.name }),
+        el("div", { text: "Sin dato en este punto (fuera de Perú, nubes o sin imágenes)." }),
+        el("div", { class: "popup__meta", text: coords }),
+      ]);
+    }
+    const decimals = idx.unit ? 1 : 3;
+    const value = d.value.toLocaleString("es-PE", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+    return el("div", { class: "popup" }, [
+      el("div", { class: "popup__title", text: idx.name }),
+      el("div", { class: "popup__value", text: idx.unit ? `${value} ${idx.unit}` : value }),
+      el("div", { class: "popup__class" }, [swatch(d.color), el("span", { text: `${d.label} (${d.range})` })]),
+      el("div", { class: "popup__meta", text: coords }),
+    ]);
+  }
+
+  async function onMapClick(e) {
+    if (isMobile() && $("#sidebar").classList.contains("is-open")) { setSheet(false); return; }
+    if (!state.layer || !state.lastParams) return;
+    abort(state.ctl.pixel);
+    state.ctl.pixel = new AbortController();
+    const popup = L.popup({ maxWidth: 260 })
+      .setLatLng(e.latlng)
+      .setContent(el("div", { class: "popup", text: "Consultando valor…" }))
+      .openOn(state.map);
+    try {
+      const data = await api(
+        "/api/pixel",
+        { ...state.lastParams, lat: e.latlng.lat.toFixed(5), lon: e.latlng.lng.toFixed(5) },
+        state.ctl.pixel.signal
+      );
+      popup.setContent(renderPixel(data));
+    } catch (err) {
+      if (err.name === "AbortError") return;
+      popup.setContent(el("div", { class: "popup popup--error", text: err.message }));
+    }
+  }
+
+  // ------------------------------------------------------------------ mapa
+  function setBasemap(name) {
+    const def = BASEMAPS[name];
+    if (state.baseLayer) state.map.removeLayer(state.baseLayer);
+    state.baseLayer = L.tileLayer(def.url, { ...def.options, zIndex: 1 }).addTo(state.map);
+  }
+
+  function buildMap() {
+    const view = state.config.view;
+    const map = L.map("map", {
+      center: view.center,
+      zoom: view.zoom,
+      minZoom: 4,
+      maxZoom: 16,
+      maxBounds: view.max_bounds,
+      maxBoundsViscosity: 0.85,
+      zoomSnap: 0.5,
+    });
+    state.map = map;
+
+    const pane = map.createPane("boundaryPane");
+    pane.style.zIndex = 450;
+    pane.style.pointerEvents = "none";
+
+    map.fitBounds(view.bounds, { padding: [10, 10] });
+    L.control.scale({ metric: true, imperial: false, position: "bottomleft" }).addTo(map);
+
+    const legend = L.control({ position: "topright" });
+    legend.onAdd = () => {
+      const div = L.DomUtil.create("div", "legend");
+      L.DomEvent.disableClickPropagation(div);
+      if (isMobile()) div.classList.add("is-collapsed");
+      state.legendEl = div;
+      return div;
+    };
+    legend.addTo(map);
+
+    const coords = $("#coords");
+    map.on("mousemove", (e) => { coords.textContent = `${e.latlng.lat.toFixed(4)}°, ${e.latlng.lng.toFixed(4)}°`; });
+    map.on("mouseout", () => { coords.textContent = ""; });
+    map.on("click", onMapClick);
+
+    window.addEventListener("resize", () => map.invalidateSize());
+  }
+
+  // ------------------------------------------------------ servidor (ventana)
+  function modalMessage(text, kind) {
+    const msg = $("#server-msg");
+    msg.textContent = text || "";
+    msg.dataset.kind = kind || "";
+  }
+
+  function openModal() {
+    state.modalShown = true;
+    $("#server-url").value = apiBase;
+    $("#server-reset").hidden = !IS_HTTP;
+    modalMessage("", "");
+    $("#server-modal").hidden = false;
+    setTimeout(() => $("#server-url").focus(), 50);
+  }
+
+  function closeModal() { $("#server-modal").hidden = true; }
+
+  async function onServerSubmit(event) {
+    event.preventDefault();
+    const url = $("#server-url").value.trim().replace(/\/+$/, "");
+    if (!/^https?:\/\/[^\s/]+/i.test(url)) {
+      modalMessage("Escriba una dirección completa que empiece con http:// o https://", "error");
+      return;
+    }
+    if (window.location.protocol === "https:" && url.startsWith("http://")) {
+      modalMessage("Esta página es segura (https) y el navegador bloquea servidores http. Use una dirección https.", "error");
+      return;
+    }
+    modalMessage("Probando conexión…", "");
+    try {
+      const res = await fetch(url + "/api/health", { headers: { Accept: "application/json" } });
+      const health = await res.json();
+      if (!res.ok || health.status !== "ok") throw new Error("respuesta inesperada");
+    } catch (_) {
+      modalMessage("No se pudo conectar. Verifique la dirección, que el servidor esté en ejecución y que permita el acceso (CORS).", "error");
+      return;
+    }
+    apiBase = url;
+    writeStore(url);
+    modalMessage("Conectado.", "ok");
+    setTimeout(closeModal, 400);
+    connect();
+  }
+
+  function onServerReset() {
+    apiBase = "";
+    writeStore("");
+    closeModal();
+    connect();
+  }
+
+  // --------------------------------------------------------------- controles
+  function bindControls() {
+    const select = $("#basemap");
+    for (const name of Object.keys(BASEMAPS)) select.append(el("option", { value: name, text: name }));
+    select.addEventListener("change", () => setBasemap(select.value));
+    setBasemap(select.value);
+
+    $("#opacity").addEventListener("input", (e) => {
+      $("#opacity-out").textContent = `${e.target.value} %`;
+      if (state.layer) state.layer.setOpacity(opacityValue());
+    });
+    $("#cloud").addEventListener("input", (e) => { $("#cloud-out").textContent = `${e.target.value} %`; });
+
+    $("#toggle-boundary").addEventListener("change", (e) => {
+      if (!state.boundary) return;
+      if (e.target.checked) state.boundary.addTo(state.map);
+      else state.map.removeLayer(state.boundary);
+    });
+
+    $("#reset-view").addEventListener("click", () => {
+      state.map.fitBounds(state.config.view.bounds, { padding: [10, 10] });
+      if (isMobile()) setSheet(false);
+    });
+
+    for (const chip of document.querySelectorAll(".chip")) {
+      chip.addEventListener("click", () => applyPreset(Number(chip.dataset.days)));
+    }
+    $("#start").addEventListener("change", clearPresetMarks);
+    $("#end").addEventListener("change", clearPresetMarks);
+
+    $("#apply").addEventListener("click", loadLayer);
+    $("#sheet-toggle").addEventListener("click", () => setSheet(!$("#sidebar").classList.contains("is-open")));
+    $("#status-close").addEventListener("click", () => setStatus(""));
+
+    $("#gee-pill").addEventListener("click", openModal);
+    $("#server-form").addEventListener("submit", onServerSubmit);
+    $("#server-close").addEventListener("click", closeModal);
+    $("#server-reset").addEventListener("click", onServerReset);
+    $("#server-modal").addEventListener("click", (e) => { if (e.target.id === "server-modal") closeModal(); });
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeModal(); });
+  }
+
+  // ------------------------------------------------------------------ inicio
+  async function loadConfig() {
+    try {
+      return await api("/api/config", null, null, 8000);
+    } catch (err) {
+      if (window.GEOPORTAL_CONFIG) return window.GEOPORTAL_CONFIG; // modo sin servidor
+      throw err;
+    }
+  }
+
+  async function connect() {
+    setPill("wait");
+    let health;
+    try {
+      health = await api("/api/health", null, null, 8000);
+    } catch (err) {
+      setPill("noserver");
+      setStatus("No hay conexión con el servidor del geoportal. Toque «Sin servidor» para configurarlo.", "warn");
+      if (!state.modalShown) openModal();
+      return;
+    }
+    if (!health.gee_ready) {
+      setPill("nogee", health.gee_error || "");
+      setStatus("El servidor está activo, pero Google Earth Engine no está configurado. Revise las credenciales (README).", "error");
+      return;
+    }
+    setPill("ok");
+    loadBoundary();
+    loadLayer();
+  }
+
+  async function init() {
+    try {
+      await ensureLeaflet();
+      state.config = await loadConfig();
+    } catch (err) {
+      setPill("noserver");
+      setStatus(err.message, "error");
+      return;
+    }
+
+    $("#end").max = toISO(new Date());
+    $("#cloud").value = state.config.defaults.cloud;
+    $("#cloud-out").textContent = `${state.config.defaults.cloud} %`;
+
+    buildMap();
+    renderIndexList();
+    bindControls();
+    applyPreset(state.config.defaults.range_days);
+    selectIndex(state.config.indices[0].key, false);
+    connect();
+  }
+
+  document.addEventListener("DOMContentLoaded", init);
+})();
+
+</script>
+</body>
+</html>

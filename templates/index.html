@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#093f2f">
+  <title>Geoportal de Índices de Vegetación · Perú</title>
+  <meta name="description" content="Visor de NDVI, SAVI, MSAVI, EVI y biomasa del territorio peruano en 5 rangos.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230d5c44'/%3E%3Cpath d='M32 12c-9 8-14 15-14 23 0 8 6 14 14 14s14-6 14-14c0-8-5-15-14-23z' fill='%2341ab5d'/%3E%3Cpath d='M32 22v28M32 34l-7-6M32 40l8-7' stroke='%2300441b' stroke-width='3' stroke-linecap='round' fill='none'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <div class="app">
+
+    <header class="topbar">
+      <div class="brand">
+        <svg class="brand__logo" viewBox="0 0 64 64" width="34" height="34" aria-hidden="true">
+          <rect width="64" height="64" rx="14" fill="#ffffff" fill-opacity=".16"/>
+          <path d="M32 12c-9 8-14 15-14 23 0 8 6 14 14 14s14-6 14-14c0-8-5-15-14-23z" fill="#5ee08f"/>
+          <path d="M32 22v28M32 34l-7-6M32 40l8-7" stroke="#093f2f" stroke-width="3" stroke-linecap="round" fill="none"/>
+        </svg>
+        <div class="brand__text">
+          <h1 class="brand__title">Geoportal de Vegetación · Perú</h1>
+          <p class="brand__sub">NDVI · SAVI · MSAVI · EVI · Biomasa</p>
+        </div>
+      </div>
+      <button type="button" id="gee-pill" class="pill pill--wait" title="Configurar servidor">
+        <span class="pill__dot" aria-hidden="true"></span>
+        <span id="gee-pill-text">Conectando…</span>
+      </button>
+    </header>
+
+    <main class="map-wrap">
+      <div id="map" aria-label="Mapa interactivo del Perú"></div>
+
+      <!-- Selector rápido de índice (solo móvil) -->
+      <div id="index-tabs" class="tabs" role="radiogroup" aria-label="Cambiar índice"></div>
+
+      <div id="coords" class="coords" aria-hidden="true"></div>
+
+      <div id="status" class="status" role="status" aria-live="polite" hidden>
+        <span id="status-spinner" class="spinner" aria-hidden="true" hidden></span>
+        <span id="status-text" class="status__text"></span>
+        <button type="button" id="status-close" class="status__close" aria-label="Cerrar aviso">×</button>
+      </div>
+
+      <noscript><p class="noscript">Este geoportal requiere JavaScript.</p></noscript>
+    </main>
+
+    <aside class="sidebar" id="sidebar" aria-label="Panel de control">
+      <button type="button" id="sheet-toggle" class="sheet-handle" aria-expanded="false" aria-controls="sidebar-body">
+        <span class="sheet-handle__bar" aria-hidden="true"></span>
+        <span class="sheet-handle__text">Panel de control</span>
+      </button>
+
+      <div class="sidebar__body" id="sidebar-body">
+
+        <section class="card">
+          <h2 class="card__title"><span class="step">1</span> Índice o producto</h2>
+          <div id="index-list" class="index-grid" role="radiogroup" aria-label="Seleccione el índice"></div>
+          <div id="index-info" class="index-info" aria-live="polite"></div>
+        </section>
+
+        <section class="card">
+          <h2 class="card__title"><span class="step">2</span> Período de análisis</h2>
+          <fieldset id="period-fields" class="fields">
+            <legend class="sr-only">Parámetros temporales</legend>
+            <div class="presets" role="group" aria-label="Rangos rápidos">
+              <button type="button" class="chip" data-days="30">30 días</button>
+              <button type="button" class="chip" data-days="90">3 meses</button>
+              <button type="button" class="chip" data-days="180">6 meses</button>
+              <button type="button" class="chip" data-days="365">12 meses</button>
+            </div>
+            <div class="row">
+              <label class="field">Desde
+                <input type="date" id="start" min="2018-01-01">
+              </label>
+              <label class="field">Hasta
+                <input type="date" id="end">
+              </label>
+            </div>
+            <label class="field">
+              <span class="field__line">Nubosidad máxima por escena <output id="cloud-out" for="cloud">30 %</output></span>
+              <input type="range" id="cloud" min="0" max="100" step="5" value="30">
+            </label>
+          </fieldset>
+          <p class="hint" id="period-hint"></p>
+          <button type="button" id="apply" class="btn btn--primary">Visualizar en el mapa</button>
+        </section>
+
+        <section class="card">
+          <h2 class="card__title"><span class="step">3</span> Visualización</h2>
+          <label class="field">
+            <span class="field__line">Opacidad de la capa <output id="opacity-out" for="opacity">85 %</output></span>
+            <input type="range" id="opacity" min="20" max="100" step="5" value="85">
+          </label>
+          <label class="field">Mapa base
+            <select id="basemap"></select>
+          </label>
+          <label class="check">
+            <input type="checkbox" id="toggle-boundary" checked>
+            <span>Mostrar límite de Perú</span>
+          </label>
+          <button type="button" id="reset-view" class="btn btn--ghost">Centrar en Perú</button>
+        </section>
+
+        <section class="card">
+          <h2 class="card__title"><span class="step">4</span> Área por rango en Perú</h2>
+          <div id="stats" class="stats" aria-live="polite">
+            <p class="muted">Las estadísticas aparecerán al visualizar una capa.</p>
+          </div>
+        </section>
+
+        <footer class="foot">
+          <p>Datos: Copernicus Sentinel-2 (ESA) · NASA ORNL DAAC · USDOS LSIB. Procesamiento: Google Earth Engine.</p>
+          <p>Toque el mapa para consultar el valor de un punto.</p>
+        </footer>
+      </div>
+    </aside>
+
+  </div>
+
+  <!-- Configuración del servidor -->
+  <div id="server-modal" class="modal" hidden>
+    <form id="server-form" class="modal__box" role="dialog" aria-modal="true" aria-labelledby="server-title" novalidate>
+      <h2 id="server-title">Conexión con el servidor</h2>
+      <p class="modal__lead">
+        Este visor consulta un servidor Python (Flask + Google Earth Engine) que calcula los índices.
+        Escriba la dirección donde está en ejecución.
+      </p>
+      <label class="field">Dirección del servidor
+        <input type="url" id="server-url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false"
+               placeholder="https://mi-geoportal.onrender.com">
+      </label>
+      <p class="hint">Ejemplos: <code>http://192.168.1.20:8080</code> (su PC, en la misma red Wi-Fi) o la dirección donde publicó el servidor.</p>
+      <p id="server-msg" class="modal__msg" role="status"></p>
+      <div class="modal__actions">
+        <button type="button" id="server-close" class="btn btn--ghost">Cerrar</button>
+        <button type="submit" class="btn btn--primary">Probar y guardar</button>
+      </div>
+      <button type="button" id="server-reset" class="link-btn" hidden>Usar el servidor de esta página</button>
+    </form>
+  </div>
+
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
