@@ -2,11 +2,11 @@
 """Capa de acceso a Google Earth Engine (GEE).
 
 Responsabilidades:
-  * Inicializar GEE (cuenta de servicio o credenciales locales).
-  * Construir composiciones Sentinel-2 sin nubes y calcular NDVI, SAVI,
-    MSAVI y EVI; servir biomasa aérea como producto de referencia.
-  * Clasificar cada índice en 5 rangos y recortarlo al territorio de Perú.
-  * Entregar URL de teselas, estadísticas de área por clase y valor puntual.
+  * Inicializar GEE mediante cuenta de servicio o credenciales locales.
+  * Construir composiciones Sentinel-2 y calcular NDVI, SAVI, MSAVI y EVI.
+  * Servir biomasa aérea como producto de referencia.
+  * Clasificar índices en cinco rangos y recortarlos al territorio de Perú.
+  * Entregar URL de teselas, estadísticas de área por clase y valores puntuales.
 """
 from __future__ import annotations
 
@@ -27,7 +27,6 @@ BIOMASS_COLLECTION = "NASA/ORNL/biomass_carbon_density/v1"
 BORDERS = "USDOS/LSIB_SIMPLE/2017"
 SAVI_L = 0.5
 
-# Las URL de teselas de GEE caducan: se cachean menos tiempo que el resto.
 TILE_TTL = min(Settings.CACHE_TTL_SECONDS, 4 * 3600)
 
 
@@ -63,14 +62,18 @@ class TTLCache:
                 return None
 
             expires, value = item
-
             if expires < time.time():
                 del self._data[key]
                 return None
 
             return value
 
-    def set(self, key: Any, value: Any, ttl: int | None = None) -> None:
+    def set(
+        self,
+        key: Any,
+        value: Any,
+        ttl: int | None = None,
+    ) -> None:
         with self._lock:
             if len(self._data) >= self._max:
                 oldest = min(
@@ -96,7 +99,7 @@ _init_lock = threading.Lock()
 
 
 def initialize(force: bool = False) -> bool:
-    """Inicializa Earth Engine. Nunca lanza: guarda el error para /api/health."""
+    """Inicializa Earth Engine y conserva el error para /api/health."""
     with _init_lock:
         if _state["ready"] and not force:
             return True
@@ -118,14 +121,15 @@ def initialize(force: bool = False) -> bool:
 
             _state.update(ready=True, error=None)
             log.info(
-                "Google Earth Engine inicializado correctamente."
+                "Google Earth Engine inicializado correctamente. "
+                "Proyecto configurado: %s",
+                project,
             )
 
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             _state.update(ready=False, error=str(exc))
-            log.warning(
-                "No se pudo inicializar Google Earth Engine: %s",
-                exc,
+            log.exception(
+                "No se pudo inicializar Google Earth Engine"
             )
 
         return _state["ready"]
@@ -136,8 +140,8 @@ def ensure_ready() -> None:
         return
 
     raise GeeNotReady(
-        "Google Earth Engine no está disponible. Revise las credenciales "
-        "y la variable GEE_PROJECT (consulte el README)."
+        "Google Earth Engine no está disponible. "
+        "Revise las credenciales y la variable GEE_PROJECT."
     )
 
 
@@ -148,13 +152,16 @@ def status() -> dict[str, Any]:
     }
 
 
+# --------------------------------------------------------------------------- #
+# Mensajes de error
+# --------------------------------------------------------------------------- #
 def _friendly(message: str) -> str:
     low = message.lower()
 
     if "timed out" in low or "deadline" in low:
         return (
-            "Google Earth Engine tardó demasiado en responder. Reduzca "
-            "el período de análisis o inténtelo de nuevo."
+            "Google Earth Engine tardó demasiado en responder. "
+            "Reduzca el período de análisis o inténtelo de nuevo."
         )
 
     if "quota" in low or "too many" in low or "429" in low:
@@ -173,17 +180,23 @@ def _friendly(message: str) -> str:
         "permission" in low
         or "not signed up" in low
         or "not authorized" in low
+        or "403" in low
     ):
         return (
-            "La cuenta de Earth Engine no tiene permisos para este proyecto. "
-            "Revise las credenciales y GEE_PROJECT."
+            "Google Earth Engine rechazó una solicitud por permisos. "
+            "Revise el proyecto GEE_PROJECT, el registro de Earth Engine "
+            "y los permisos de la cuenta de servicio. Consulte los logs "
+            "de Render para ver el error original."
         )
 
-    return "Earth Engine devolvió un error: " + message[:300]
+    return (
+        "Earth Engine devolvió un error: "
+        + message[:500]
+    )
 
 
 def _safe(fn: Callable[[], Any]) -> Any:
-    """Ejecuta una llamada a GEE traduciendo errores a mensajes legibles."""
+    """Ejecuta una llamada GEE y registra el error original."""
     try:
         return fn()
 
@@ -191,26 +204,36 @@ def _safe(fn: Callable[[], Any]) -> Any:
         raise
 
     except ee.EEException as exc:
+        log.error(
+            "Error original de Google Earth Engine: %s",
+            str(exc),
+            exc_info=True,
+        )
         raise GeeError(_friendly(str(exc))) from exc
 
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         log.exception(
-            "Error inesperado al comunicarse con Earth Engine"
+            "Error inesperado al comunicarse con Google Earth Engine"
         )
         raise GeeError(
-            "Error de comunicación con Google Earth Engine."
+            "Error de comunicación con Google Earth Engine. "
+            "Consulte los logs del servidor."
         ) from exc
 
 
 # --------------------------------------------------------------------------- #
-# Construcción de imágenes
+# Límites geográficos
 # --------------------------------------------------------------------------- #
 def _peru() -> ee.FeatureCollection:
-    return ee.FeatureCollection(BORDERS).filter(
-        ee.Filter.eq("country_na", "Peru")
+    return (
+        ee.FeatureCollection(BORDERS)
+        .filter(ee.Filter.eq("country_na", "Peru"))
     )
 
 
+# --------------------------------------------------------------------------- #
+# Sentinel-2
+# --------------------------------------------------------------------------- #
 def _s2_collection(
     start: str,
     end: str,
@@ -250,6 +273,9 @@ def _mask_clouds(img: ee.Image) -> ee.Image:
     return img.updateMask(bad.Not())
 
 
+# --------------------------------------------------------------------------- #
+# Índices espectrales
+# --------------------------------------------------------------------------- #
 def _spectral_index(index: str, comp: ee.Image) -> ee.Image:
     nir = comp.select("B8")
     red = comp.select("B4")
@@ -283,7 +309,7 @@ def _spectral_index(index: str, comp: ee.Image) -> ee.Image:
             },
         )
 
-    else:  # pragma: no cover
+    else:
         raise ValueError(f"Índice desconocido: {index}")
 
     return value.rename("v")
@@ -296,7 +322,7 @@ def _build(
     max_cloud: int | None,
     region: ee.Geometry,
 ):
-    """Devuelve (imagen_de_valores 'v', colección_s2 o None)."""
+    """Devuelve la imagen de valores 'v' y la colección Sentinel-2."""
     if index == "BIOMASA":
         image = (
             ee.ImageCollection(BIOMASS_COLLECTION)
@@ -305,6 +331,11 @@ def _build(
             .rename("v")
         )
         return image, None
+
+    if not start or not end or max_cloud is None:
+        raise ValueError(
+            "Se requieren fecha inicial, fecha final y nubosidad máxima."
+        )
 
     col = _s2_collection(
         start,
@@ -324,44 +355,51 @@ def _build(
 
 
 def _classify(value: ee.Image, index: str) -> ee.Image:
-    """Clasifica en 5 rangos (1-5) conservando la máscara original."""
+    """Clasifica en cinco rangos (1-5), conservando la máscara original."""
     cls = ee.Image(1)
 
     for threshold in INDICES[index]["thresholds"]:
         cls = cls.add(value.gt(threshold))
 
-    return cls.updateMask(value.mask()).toInt8().rename("cls")
+    return (
+        cls.updateMask(value.mask())
+        .toInt8()
+        .rename("cls")
+    )
 
 
 # --------------------------------------------------------------------------- #
-# API pública
+# API pública: límite de Perú
 # --------------------------------------------------------------------------- #
 def get_boundary() -> dict:
-    """Límite de Perú (GeoJSON Feature, simplificado) para dibujarlo en el mapa."""
+    """Devuelve el límite de Perú como una entidad GeoJSON."""
     ensure_ready()
 
     key = ("boundary",)
     cached = _cache.get(key)
 
-    if cached:
+    if cached is not None:
         return cached
 
-    # Obtener la geometría simplificada de Perú desde Earth Engine.
+    # Registrar el nombre de la operación ayuda a identificar errores 403.
+    log.info(
+        "Consultando límite de Perú en Earth Engine: colección=%s",
+        BORDERS,
+    )
+
     geom = _safe(
         lambda: _peru().geometry().simplify(1000).getInfo()
     )
 
-    # Verificar que Earth Engine haya devuelto una geometría válida.
     if not isinstance(geom, dict) or not geom.get("type"):
         log.error(
-            "Earth Engine devolvió una geometría inválida para Perú: %s",
+            "Earth Engine devolvió una geometría inválida: %r",
             geom,
         )
         raise GeeError(
             "Earth Engine no devolvió una geometría válida para Perú."
         )
 
-    # GeoJSON puede representar una GeometryCollection de forma distinta.
     if geom["type"] == "GeometryCollection":
         geometries = geom.get("geometries", [])
 
@@ -380,7 +418,7 @@ def get_boundary() -> dict:
 
         if coordinates is None:
             log.error(
-                "Geometría de Perú sin coordenadas. Tipo recibido: %s",
+                "Geometría sin coordenadas. Tipo recibido: %s",
                 geom.get("type"),
             )
             raise GeeError(
@@ -398,32 +436,42 @@ def get_boundary() -> dict:
         "geometry": geometry,
     }
 
-    _cache.set(
-        key,
-        feature,
-        ttl=24 * 3600,
-    )
+    _cache.set(key, feature, ttl=24 * 3600)
 
+    log.info("Límite de Perú cargado correctamente.")
     return feature
 
 
+# --------------------------------------------------------------------------- #
+# API pública: teselas de mapas
+# --------------------------------------------------------------------------- #
 def get_tiles(
     index: str,
     start: str | None,
     end: str | None,
     max_cloud: int | None,
 ) -> dict:
-    """URL de teselas XYZ del índice clasificado en 5 rangos, recortado a Perú."""
+    """Devuelve la URL de teselas del índice clasificado."""
     ensure_ready()
 
     key = ("tiles", index, start, end, max_cloud)
     cached = _cache.get(key)
 
-    if cached:
+    if cached is not None:
         return cached
 
+    if index not in INDICES:
+        raise ValueError(f"Índice no válido: {index}")
+
+    log.info(
+        "Generando teselas: índice=%s, fechas=%s a %s",
+        index,
+        start,
+        end,
+    )
+
     meta = INDICES[index]
-    peru = _peru().geometry()
+    peru = _safe(lambda: _peru().geometry())
 
     value, col = _build(
         index,
@@ -458,38 +506,42 @@ def get_tiles(
         "index": index,
         "tile_url": map_id["tile_fetcher"].url_format,
         "scenes": scenes,
-        "period": {
-            "start": start,
-            "end": end,
-        } if start else None,
+        "period": (
+            {"start": start, "end": end}
+            if start
+            else None
+        ),
         "classes": build_classes(index),
     }
 
-    _cache.set(
-        key,
-        result,
-        ttl=TILE_TTL,
-    )
+    _cache.set(key, result, ttl=TILE_TTL)
 
+    log.info("Teselas generadas correctamente para %s.", index)
     return result
 
 
+# --------------------------------------------------------------------------- #
+# API pública: estadísticas de área
+# --------------------------------------------------------------------------- #
 def get_stats(
     index: str,
     start: str | None,
     end: str | None,
     max_cloud: int | None,
 ) -> dict:
-    """Área (km²) y porcentaje por clase dentro de Perú."""
+    """Devuelve área en km² y porcentaje por clase dentro de Perú."""
     ensure_ready()
+
+    if index not in INDICES:
+        raise ValueError(f"Índice no válido: {index}")
 
     key = ("stats", index, start, end, max_cloud)
     cached = _cache.get(key)
 
-    if cached:
+    if cached is not None:
         return cached
 
-    peru = _peru().geometry()
+    peru = _safe(lambda: _peru().geometry())
 
     value, _ = _build(
         index,
@@ -537,8 +589,8 @@ def get_stats(
     )
 
     by_class = {
-        int(g["cls"]): float(g["sum"])
-        for g in (out.get("groups") or [])
+        int(group["cls"]): float(group["sum"])
+        for group in (out.get("groups") or [])
     }
 
     total_km2 = float(out.get("total") or 0.0)
@@ -581,9 +633,13 @@ def get_stats(
 
     _cache.set(key, result)
 
+    log.info("Estadísticas calculadas correctamente para %s.", index)
     return result
 
 
+# --------------------------------------------------------------------------- #
+# API pública: consulta de un píxel
+# --------------------------------------------------------------------------- #
 def get_pixel(
     index: str,
     lat: float,
@@ -592,12 +648,15 @@ def get_pixel(
     end: str | None,
     max_cloud: int | None,
 ) -> dict:
-    """Valor del índice y su clase en un punto (clic en el mapa)."""
+    """Devuelve el valor del índice y su clase en un punto del mapa."""
     ensure_ready()
+
+    if index not in INDICES:
+        raise ValueError(f"Índice no válido: {index}")
 
     meta = INDICES[index]
     point = ee.Geometry.Point([lon, lat])
-    peru = _peru().geometry()
+    peru = _safe(lambda: _peru().geometry())
 
     value, _ = _build(
         index,
